@@ -2,9 +2,9 @@ name: Java CI with Gradle, Build and Push Docker Image
 
 on:
   push:
-    branches: [ "Provider" ]
+    branches: [ "edc-connector" ]
   pull_request:
-    branches: [ "Provider" ]
+    branches: [ "edc-connector" ]
 
 permissions:
   contents: read
