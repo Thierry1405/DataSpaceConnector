@@ -1,151 +1,103 @@
-# IDS Connector Launcher
+# EDC Connector mit Integration von IDS-Protokollen
 
-This launcher includes all extensions that are required for an IDS Connector deployment. That 
-includes communication via an IDS protocol, currently IDS Multipart Messages, as well as using an 
-IDS DAPS as the Identity Provider.
+Diese Dokumentation beschreibt wie Komponente eines Datenraums konfiguriert werden sollten, damit
+wir einen funktionsfähigen Datenraum implementieren. Diese Komponente sind ein Connector und ein 
+DAPS-Server.
 
-## Prerequisites
+**Bemerkung:** Diese Dokumentation basert sich auf die Eclipse-Dokumentation.
 
-As the connector defined in this launcher connects to an IDS DAPS, a running and reachable DAPS is 
-required for the connector to be able to communicate via IDS protocol. In addition, you need a valid 
-certificate (located in a keystore, e.g. `.p12` format) provided by this DAPS that can be used to
-uniquely identify the connector.
 
-In the case that you do not have access to a publicly available DAPS or do not have a certificate 
-for one, you can set up and configure a local DAPS instance for testing. To do so, please follow 
-[this](#setting-up-a-local-daps-instance) guide.
+# Szenario
 
-## Modules
+Der Datentaum hat die Aufgabe, einen sicheren Datenaustauch und eine Datensouveränität zu ermöglichen.
+In diesem Szenario haben wir einen Provider, der Daten durch sein Connector zur Verfügung stellt. Eine 
+Person, die auf diese Daten zugreifen möchte, sollte nämlich auch über ein Connector haben, das eine
+Verbindung zu einem Endpunkt, wo die Daten gespeichert werden. Die Provider und Consumer-Connectors
+sehen nämlich ähnlich aus und enterscheiden sich nur mit ihren Parametern. Die Teilnehmer (Provider und
+Consumer) werden entweder lokal oder auf einem Docker-Container installiertg. Was den Container angeht,
+wird ein Docker-Image mithilfe der CI/CD Pipeline erstellt. die wir auf Docker Hub speichern und von dort 
+heruntergeladen werden kann. Die Connectors haben Besonderheiten, die wir im Rahmen der Entwicklung genauer
+angucken werden. Um auch den Datenraum teilzunehmen, werden bestimmte Attribute an jeden neuen Teilnehmer 
+geschickt, die von einem Identity-Probider erstellt werden, damit jeder Teilnehmer eindeutig im Datenraum 
+identifiziert wird. Nach dieser Phase, wird es möglich sein, andere Schritte durchzuführen, die am Ende
+zu einem Datentransfer führen werden. 
 
-The following modules are used for this launcher:
+## Voraussetzungen
 
-### Core
-| Name | Description                                                                                                   |
-|------|---------------------------------------------------------------------------------------------------------------|
-| core | all core modules, including e.g. the BaseRuntime as well as the modules for transfer and contract negotiation |
+Die Voraussetzungen der Entwicklung können einfach im Szenario des Datenraums verstanden werden. 
+Für das definierte Szenario dieses Projekt werden nämlich drei VMs (virtuelle Maschinen) gebraucht.
+Die ersten zwei entsprechen den Teilnehmern des Datenraums (Provider und Consumer). Diese Teilnehmer
+brauchen jeweils ein Connector für die Realisierung eines Datenaustauchs oder einer Verbindung mit
+Datenquellen oder senken. Die letze VM wird für die Installation des DAPS-Servers benötigt, der als
+als Identity Provider betrachtet wird. Auf dieser VM wird auch die Zertifikate von jedem Teilnehmer
+und DAPS selbst gespeichert. Diese Zertifikate werden in Keystore (Format .p12) gespeichert und and
+die Teilnehmer geschickt. Wir benutzen kein SSL-Zerifikat.
 
-### Extensions
 
-| Name                                   | Description                                                                        |
-|----------------------------------------|------------------------------------------------------------------------------------|
-| extensions:data-protocols:ids          | contains all IDS modules, e.g. for dispatching and handling IDS multipart messages | 
-| extensions:filesystem:configuration-fs | reads configuration properties from a file in the file-system                      | 
-| extensions:filesystem:vault-fs         | file-system based vault, required for using a certificate from the file-system     | 
-| extensions:iam:oauth2:oauth2-core      | provides OAuth2 authentication, required as DAPS is OAuth2 based                   | 
-| extensions:iam:oauth2:oauth2-daps      | provides the DAPS specific extension for OAuth2                                    | 
-| extensions:api:management-api     | provides endpoints e.g. for initiating a contract negotiation or a data transfer   |
+## Module
 
-All stores used in this launcher are in-memory implementations, meaning **all data will be lost 
-once the connector is shut down**. If you want data to be persisted even after the connector shuts 
-down, you may want to exchange the in-memory implementations for e.g. `CosmosDB` backed implementations.
+Alle Module, die in der Bacherlorarbeit definiert werden, sind tatsächlich die Module, die wir für 
+die Entwicklung des Connectors benutzt haben. Diese sind auch in der Bachelorarbeit sachlich beschreibt.
 
-## Configuration
+Das folgende Bild zeigt eine Übersicht dieser Module in unserer [Build-Datei](./build.gradle.kts) : 
 
-Some extensions used in this launcher require certain configuration values to be provided at 
-application start. Since the `filesystem:configuration-fs` extension is used, we can provide these 
-values in a `.properties` file. You can find an example [config.properties](./config.properties) in 
-this launcher's directory. Please adjust this for your setup as follows:
+```kotlin
+// in build.gradle.kts:
+    implementation(project(":core:control-plane:control-plane-core"))
+    implementation(project(":core:data-plane-selector:data-plane-selector-core"))
+    implementation(project(":core:data-plane:data-plane-core"))
+    
+    implementation(project(":data-protocols:ids"))
 
-* `web.http.port`: The EDC's port defaults to 8181. Adjust this property to run it on a different port.
-* `web.http.path`: The default path prefix under which endpoints are available.
-* `web.http.ids.port`: The port on which IDS endpoints (currently only the Multipart endpoint) are available.
-* `web.http.ids.path`: The path prefix under which IDS endpoints (currently only the Multipart endpoint) are available.
-* `ids.webhook.address`: Set this to the address at which another connector can reach your connector, 
-  as it is used as a callback address during the contract negotiation, where messages are exchanged 
-  asynchronously. If you change the IDS API port, make sure to adjust the webhook address accordingly.
-* `edc.api.auth.key`: Value of the header used for authentication when calling 
-  endpoints of the management API.
-* `edc.oauth.token.url`: Set this to the URL of the DAPS you want to use followed by `/token` or 
-  `/v2/token`, depending on the DAPS used.
-* `edc.oauth.client.id`: Identifier from the certificate for the DAPS. You can find instructions on 
-  how to get the identifier from the certificate [below](#getting-the-certificate-identifier).
-* `edc.oauth.provider.audience`: Audience used when requesting a token from the DAPS. This feature 
-  can be used to limit the validity of the token to certain connectors, but is currently not 
-  supported by the DAPS. Therefore, this property has to be set to `idsc:IDS_CONNECTORS_ALL`.
-* `edc.oauth.provider.jwks.url`: Set this to the URL of the DAPS you want to use followed by 
-  `/.well-known/jwks.json`.
-* `edc.oauth.certificate.alias`: Set this to your certificate's `alias` in the keystore.
-* `edc.oauth.private.key.alias`: Set this to your certificate's `alias` in the keystore.
+    implementation(project(":extensions:common:configuration:configuration-filesystem"))
+    implementation(project(":extensions:common:vault:vault-filesystem"))
 
-### Getting the Certificate Identifier
+    implementation(project(":extensions:common:iam:oauth2:oauth2-service"))
+    implementation(project(":extensions:common:iam:oauth2:oauth2-daps"))
 
-You can get the identifier of the certificate by using `openssl`. For this, a `.cert` file is 
-required (not the `.p12`). If you only have the `.p12` file available, you can extract the 
-certificate by running:
+    implementation(project(":extensions:control-plane:api:management-api"))
 
-```shell
-openssl pkcs12 -in <your-keystore>.p12 -out <output-name-of-your-cert>.cert -nodes
+    implementation(project(":extensions:common:auth:auth-tokenbased"))
+    
+    implementation(project(":extensions:control-plane:transfer:transfer-data-plane"))
+    
+    implementation(project(":extensions:common:api:api-observability"))
+    
+    implementation(project(":extensions:data-plane:data-plane-http"))
+    implementation(project(":extensions:data-plane-selector:data-plane-selector-client"))
 ```
+Die beschreibung dieser Module könnte auch in der Eclipse-Dokumentation gefunden werden.
 
-When you have the `.cert` file available, you next need to extract the `Subject Key Identifier` and 
-the `Authority Key Identifier`, as these two compose the complete identifier.
 
-#### 1. Getting the Subject Key Identifier
+## Konfiguration des Connectors
 
-To get the `Subject Key Identifier`, run the following command:
+Die Module, die in der Build-Datei vom Connector defniert werden, sind nicht ausreichend, um ein Connector
+mühelos installieren. Manche Modulen brauchen zusätzliche Parameter, die erforderlich sein werden, um ein 
+Connector sorglos zu implementieren. Alle benötigte Parameter sind in unserer [config.properties](./config.properties) Datei 
+gespeichert und eine konkrete Beschreibung jedes Parameters könnte auf der [Eclipse-Dokumentation](https://github.com/eclipse-edc/Connector/tree/main/launchers/ids-connector#readme) gefunden werden. Ein wichtiger Punkt dabei wäre zu erwähnen, dass die Definition dieser
+Parameter nur ermöglicht wird, wenn das Modul **extensions:common:configuration:configuration-filesystem**
+in der Konfiguration vorhanden ist.
 
-```shell
-openssl x509 -in <your-cert>.cert -noout -text | grep -A1 "Subject Key Identifier"
-```
+## Ausführen des Connectors
 
-This will return output similar to the following, where the second line is the `Subject Key Identifier`:
+Da wir das Connector jetzt konfiguriert haben, sind wir normalerweise in der Lage dieses zu starten.
+Das Connector kann auf zwei verschiedene Arten (Lokal oder auf einem Container) gestartet werden und 
+daher werden wir diese zwei Möglichkeiten vorstellen. Es gibt noch manche Parameter, die für Ausführung 
+notwendig sind, egal welche Art der Ausführung wir benutzten.
 
-```shell
-X509v3 Subject Key Identifier: 
-    52:71:9A:45:C9:78:EB:A3:0C:B5:57:25:87:35:3A:BF:94:46:A3:B8
-```
+Diese Parametern sind:
 
-#### 2. Getting the Authority Key Identifier
+* `edc.fs.config`: Der Pfad der `config.properties` Datei.
+* `edc.vault`: Der Pfad der `vault.properties` Datei (kann auch den gleichen Pfad
+wie den Pfad der `config.properties` Datei).
+* `edc.keystore`: Der Pfad bis zum Keystore.
+* `edc.keystore.password`: Passwort vom Keystore.
 
-To get the `Authority Key Identifier`, run the following command:
 
-```shell
-openssl x509 -in <your-cert>.cert -noout -text | grep -A1 "Authority Key Identifier"
-```
+### Lokaler Aufbau
 
-This will return output similar to the following, where the second line is the 
-`Authority Key Identifier`:
-
-```shell
-X509v3 Authority Key Identifier: 
-    keyid:52:71:9A:45:C9:78:EB:A3:0C:B5:57:25:87:35:3A:BF:94:46:A3:B8
-```
-
-#### 3. Composing the Identifier
-
-The `Subject Key Identifier` and the `Authority Key Identifier`, separated by a colon, compose the 
-certificate identifier. So your resulting identifier should look as follows:
-
-```
-52:71:9A:45:C9:78:EB:A3:0C:B5:57:25:87:35:3A:BF:94:46:A3:B8:keyid:52:71:9A:45:C9:78:EB:A3:0C:B5:57:25:87:35:3A:BF:94:46:A3:B8
-```
-
-Set this identifier in the `config.properties` for `edc.oauth.client.id`.
-
-## Running the launcher
-
-After the configuration has been adjusted, the launcher can be run. As a `Dockerfile` is provided, 
-you can either run the connector locally or as a Docker container.
-
-When running the connector, some additional properties have to be provided as system properties:
-
-* `edc.fs.config`: The path to the `config.properties` file.
-* `edc.vault`: The path to the `vault.properties` file (required by the `vault-fs` extension, can be 
-  set to point to the `config.properties` file).
-* `edc.keystore`: The path to the keystore.
-* `edc.keystore.password`: The password for the keystore.
-
-**Note, that in case you are using an external DAPS or running your local DAPS under HTTPS, the DAPS 
-is likely to use a self-signed SSL certificate, which will not be trusted by the connector by 
-default. In that case, supply a custom truststore and password via the system properties 
-`javax.net.ssl.trustStore` and `javax.net.ssl.trustStorePassword` in the same way as the other 
-system properties.**
-
-### Local setup
-
-To run the connector locally, build the `.jar` using the Gradle wrapper and then run it using Java. 
-In the run command, be sure to provide the aforementioned system properties. Run the following 
-commands in the root directory of the project:
+Zur Ausführung des Connectors ist die .jar Datei erforderlich. Diese Datei wird mithilfe des Gradle wrapper 
+erstellt. Also Zur Erstellung des Connestors werden folgende Kommandos durchgeführt: 
 
 ```shell
 ./gradlew clean :launchers:ids-connector:build
@@ -156,117 +108,76 @@ java -Dedc.fs.config=<path-to-config.properties> \
     -jar launchers/ids-connector/build/libs/dataspace-connector.jar
 ```
 
-### Docker
+### Docker Image
 
-This launcher provides a [Dockerfile](./Dockerfile), which builds the connector and uses environment 
-variables for setting the system properties from the `java` command. Thus, the image only has to be 
-built once and can then be used for different deployments. By default, no custom truststore is supplied in the
-Dockerfile. If you need to use a custom truststore, please have a look at [this section](#custom-truststore). 
-
-To build the image, run the following command in the root directory of the project:
+Um das Doker Image zu erstellen haben wir eine [CI/CD-Pipeline](https://github.com/Thierry1405/DataSpaceConnector/blob/edc-connector/.github/workflows/ci.yml)
+erstellt, die erstmal die Konfigurationen überprüft und dann erstellt ein Docker Image auf Basis
+der resultierenden .jar Datei, das auf Docker Hub gespeichert wird. Von dort kann das Image mit dem
+folgenden Kommando heruntergeladen:
 
 ```shell
-docker build -t edc-ids-connector -f launchers/ids-connector/Dockerfile .
+docker pull djeutchou/edc-ids-connector:latest
 ```
-
-Before running the image, you need to create an `.env` file supplying the system properties. You can 
-adjust the [ids-connector.env](./ids-connector.env) supplied in this sample. The paths to the 
-properties and keystore files should not point to your local environment this time, but to the 
-location where you mount the files in the container. Therefore, make sure that the paths match the mount paths in the
-command below.
-
-In the following command, adjust the port if you changed it in your `config.properties` and adjust 
-the mounted volumes to match your environment. The mounted volumes should contain the 
-`config.properties` file as well as the keystore. If you added the system properties for a custom 
-truststore to the `Dockerfile`, make sure to mount the truststore as well.
+Wenn wir das Image erfolgreich heruntergeladen haben, sind wir jetzt in der Lage dieses in einem
+Container mit notwendigen Parametern wie folgt starten:
 
 ```shell
-docker run -p 8181:8181 -p 8282:8282 \
+docker run -p 8181:8181 -p 8182:8182 -p 8282:8282  \
     --env-file ./launchers/ids-connector/ids-connector.env \
     -v '/directory/with/properties:/config/config.properties' \
     -v '/directory/with/keystore:/config/keystore.p12' \
     edc-ids-connector
 ```
+**Bemerkung:** In der [ids-connector.env](https://github.com/Thierry1405/DataSpaceConnector/blob/edc-connector/launchers/ids-connector/ids-connector.env) Datei werden nur Variable definiert.
 
-#### Custom truststore
 
-If you need to use a custom truststore, add the properties `-Djavax.net.ssl.trustStore` and
-`-Djavax.net.ssl.trustStorePassword` to the `ENTRYPOINT` in the Dockerfile:
 
-```Dockerfile
-ENTRYPOINT java \
-    -Djava.security.edg=file:/dev/.urandom \
-    -Dedc.ids.id="urn:connector:edc-connector-24" \
-    -Dedc.ids.title="Eclipse Dataspace Connector" \
-    -Dedc.ids.description="Eclipse Dataspace Connector with IDS extensions" \
-    -Dedc.ids.maintainer="https://example.maintainer.com" \
-    -Dedc.ids.curator="https://example.maintainer.com" \
-    -Djavax.net.ssl.trustStore=$JAVA_TRUSTSTORE \
-    -Djavax.net.ssl.trustStorePassword=$JAVA_TRUSTSTORE_PASSWORD \
-    -jar dataspace-connector.jar
-```
+### Aufbau des lokalen DAPS-Servers
 
-The corresponding values are added to the `env` file:
+Nachdem wir eine Lösung für die Erstellung eines Connectors gefunden haben, ist es jetzt wesentlich
+einen DAPS-Server einzurichten. Die folgenden Schritte definieren wie wir unseren DAPS-Server eingerichtet
+haben(alle Kommandos werden im Omejdn Repository ausgeführt werden):
 
-```env
-JAVA_TRUSTSTORE=/config/truststore.p12
-JAVA_TRUSTSTORE_PASSWORD=<truststore-password>
-```
-
-When running the image, make sure to mount the truststore:
-
-```shell
-docker run -p 8181:8181 -p 8282:8282 \
-    --env-file ./launchers/ids-connector/ids-connector.env \
-    -v '/directory/with/properties:/config/config.properties' \
-    -v '/directory/with/keystore:/config/keystore.p12' \
-    -v '/directory/with/truststore:/config/truststore.p12' \
-    edc-ids-connector
-```
-
----
-
-### Setting up a local DAPS instance
-
-If you do not have access to an external DAPS, you can set up your own local instance for testing. 
-To do so, follow these steps:
-
-1. Checkout the [Omejdn DAPS repository](https://github.com/International-Data-Spaces-Association/omejdn-daps)
-2. Retrieve the submodules: 
+1. Überprüfen Sie [Omejdn DAPS repository](https://github.com/International-Data-Spaces-Association/omejdn-daps)
+Dieses Repository erklärt die Prinzipe eines DAPS-Servers und wie er läuft.
+2. Rufen Sie die Submodule ab: 
    ```bash
    git submodule update --init --remote
    ```
-3. Generate a key and a certificate for the DAPS instance:
+3. Generieren Sie einen Schlüssel und ein Zertifikat für die DAPS-Instanz:
    ```bash
     openssl req -newkey rsa:2048 -new -nodes -x509 -days 3650 -keyout keys/omejdn/omejdn.key -out daps.cert
    ```
-4. Modify `.env` in the project root: set `DAPS_DOMAIN` to the URL your DAPS instance will be running at.
-5. Register a connector (the security profile is optional and will default to *idsc:BASE_SECURITY_PROFILE* if not
-   specified):
-   ```bash
+Wie wir oben schon erklärt haben, verwenden wir keine Zertifizierungsstelle und deshalb soll das DAPS-Zertfikat selbst erstellt.</br>
+4. Im Projektstamm ändern Sie die `.env` Datei: `DAPS_DOMAIN` auf die URL setzen, unter der Ihre DAPS-Instanz ausgeführt wird.
+Die `.env` Datei enthält die Konfigurationen des DAPS-Servers.</br>
+5. Registrieren Sie einen Connector (das Sicherheitsprofil ist optional und wird standardmäßig auf *idsc:BASE_SECURITY_PROFILE* gesetzt, 
+wenn es nicht angegeben WIRD):  
+  ```bash
    scripts/register_connector.sh <client-name-for-connector> <security-profile>
    ```
-6. Optionally, you can register more connectors by running step 5 multiple times with different client names.
-7. Run the DAPS:
+Nach der Regestrierung des Connectors werden zwei Dateien erstellt (Ein Schlüssel <client-name-from-step-5>.key und ein Zertifikat <client-name-from-step-5>.cert).
+und im Verzeichnis `keys` gespeichert.</br>
+6. Erstellen Sie ein Keystore, das dei beide Dateien speichert.
+    ```bash
+    openssl pkcs12 -export -in keys/<client-name>.cert -inkey keys/<client-name>.key -out <client-name>.p12
+    ```
+Im resultierenden Schlüsselspeicher (Keystore) hat das Zertifikat den Alias 1​​.</br>
+7. Schicken Sie das Keystore an das Connector.
    ```bash
-   docker compose -f compose-development.yml up
+   scp omejdn-daps/keystor.p12 user@xxx.xxx.xxx.xxx:/home/remote_dir
    ```
-8. When you see `omejdn-server_1  | == Sinatra (v2.1.0) has taken the stage on 4567 for development with backup from Thin`
-   in the logs, the DAPS is ready to accept requests.
+  </br>
+8. Optional können Sie weitere Connectors registrieren, indem Sie Schritt 5 mehrmals mit unterschiedlichen Clientnamen ausführen. </br>
+9. Führen Sie das DAPS aus:
+   ```bash
+   docker compose -f compose.yml up
+   ```
+  </br>
+10. Wenn Sie `omejdn-server_1  | == Sinatra (v2.1.0) has taken the stage on 4567 for development with backup from Thin`
+   in die Logs sehen, ist das DAPS bereit, Anfragen anzunehmen.
    
-The URL under which the connector can reach the DAPS is `http://localhost:80` due to the `NGINX` used in the 
-`docker-compose` file.
+Die URL, unter der der Konnektor das DAPS erreichen kann, ergibt sich aus `http://localhost:80` (akann aber in der `.env` Datei verändert werden),
+der NGINX in der `docker-compose` Datei verwendtet.
 
-#### Creating the keystore for the connector
-
-After running step 5 from the above list, two files named `<client-name-from-step-5>.cert` and
-`<client-name-from-step-5>.key` have been added in the `keys` directory. Using `openssl` and these 
-files, a keystore can be created. The following command will create the keystore in the root 
-directory of the DAPS repository. To create it in a specific directory, precede `<client-name>.p12` 
-with the desired output path.
-
-```bash
-openssl pkcs12 -export -in keys/<client-name>.cert -inkey keys/<client-name>.key -out <client-name>.p12
-```
-
-In the resulting keystore, the certificate will have alias `1`.
+Die obenstehenden Schritte können auch in der [Eclipse-Dokumentation](https://github.com/eclipse-edc/Connector/tree/main/launchers/ids-connector#readme) gefunden werden.
